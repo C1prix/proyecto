@@ -1,0 +1,377 @@
+;Archivo: Main.s
+;Dispositivo: PIC16F887
+;Autor: Gabriel Cipriano
+;Compilador: pic-as (v2.30),MPLABX v5.40
+;
+;Programa: Generador de Ondas
+;Hardware: LEDs en el puerto A y push buttons en el puerto B con Displays en el Puerto C
+;
+;Creado: 13 de febrero, 2023
+;Ultima modificacion: 17 de Febrero, 2023
+
+PROCESSOR 16F887
+    
+#include <xc.inc>
+    
+;configuracion Word 1
+CONFIG FOSC=INTRC_NOCLKOUT //Oscilador Interno sin Salidas 
+CONFIG WDTE=OFF	// WDT disabled reinicio repetitivo del procesador
+CONFIG PWRTE=OFF	//PWRT enabled (espera de 72ms al iniciar 
+CONFIG MCLRE=OFF //El pin del MCLR se utiliza como I/O
+CONFIG CP=OFF	//Sin proteccion de codigo
+CONFIG CPD=OFF	//sin proteccion de Datos
+
+CONFIG BOREN=OFF	//Sin reinicio cuando el voltaje de alimentacion baja de 4v
+CONFIG IESO=OFF //Reinicio sin cambio de Reloj de interno a Externo
+CONFIG FCMEN=OFF	//Cambio de reloj externo a interno en caso de fallo
+CONFIG LVP=OFF	//Programacion en bajo voltaje permitida
+
+;configuration word 2
+CONFIG WRT=OFF	//Proteccion de autoescritura por el programa desactivada
+CONFIG BOR4V=BOR40V//Reinicio abajo de 4v, (BOR221V=2. 1V)
+
+
+reinicio_tmr	macro
+    banksel PORTA
+    movlw   237
+    movwf   TMR0
+    bcf	    T0IF
+    endm 
+	
+PSECT udata_bank0; Variables en el banco seleccionado 0
+	var1:	    DS	2   ;2 bytes
+	var2:	    DS	2   ;2 bytes
+	vTmr:	    DS	2   ;2 bytes
+	Select:	    DS	1   ;1 byte
+	Cuadra:	    DS	1   ;1 byre
+	Tri:	    DS	1   ;1 byte
+	hz:	    DS	1   ;1 byte
+	ondas:	    DS	1   ;1 byte
+	cont_big:   DS	1   ;1 byte
+	cont_small: DS	1   ;1 byte
+	ancho_onda: DS	1   ;1 byte
+      escoger_onda: DS	1   ;1 byte
+    
+    
+PSECT udata_shr  ;memoria compartida  
+	W_TEMP:		DS  1; 1 byte
+	STATUS_TEMP:	DS  1; 1 byte
+
+PSECT resVect, class=CODE, abs, delta=2    
+;---------------Vector reset------------------------------------------------
+ORG 00h	;posicion 0000h para el reset
+resetVec:
+    PAGESEL main
+    goto main
+
+PSECT intVect, class=CODE, abs, delta=2    
+;---------------Vector Interrupcion------------------------------------------
+ORG 04h	;posicion 0004h para las interrupciones
+pus:
+    movwf   W_TEMP
+    swapf   STATUS, W
+    movwf   STATUS_TEMP
+    
+isr:    
+    btfsc   T0IF
+    call    int_tmr0
+    
+    
+    
+    
+pop:
+    swapf   STATUS_TEMP,    W
+    movwf   STATUS
+    swapf   W_TEMP, F
+    swapf   W_TEMP, W
+    retfie
+;--------------------subrutinas de Interrupcion------------------------------
+int_tmr0:
+    reinicio_tmr    
+    call    check
+    return
+
+int_IOCB:
+   
+PSECT code, delta=2, abs
+ORG 100h
+tabla_hz:
+    clrf    PCLATH
+    bsf	    PCLATH, 0	;pclath=01
+    andlw   0x0f
+    addwf   PCL		;PC = PCLATH + PCL
+    ;	    .GFEDCBA
+    retlw   254		;0
+    retlw   158		;0
+    retlw   190		;0
+    retlw   207		;0
+    retlw   216		;0
+    retlw   223		;0
+    retlw   228		;0
+    retlw   231		;0
+    retlw   234		;0
+    retlw   236		;0
+    retlw   238		;0
+    retlw   239		;0
+    retlw   240		;0
+    retlw   242		;0
+    retlw   242		;0
+    retlw   242		;0
+    retlw   243		;0
+    retlw   244		;0
+    retlw   245		;0
+    retlw   246		;0
+    retlw   247		;0
+    retlw   248		;0
+    retlw   249		;0
+    retlw   250		;0
+    retlw   251		;0
+    retlw   252		;0
+    retlw   253		;0
+    retlw   254		;0
+    
+    
+main:
+    call    config_io	    ;PORTA y PORTC como salidas, RB1 y RB0 como entradas
+    call    config_reloj    ;4MHZ
+    call    config_tmr
+    call    config_interrupciones
+    call    config_IOCB
+    banksel PORTA
+    
+;---------------------------Loop principal-----------------------------------
+loop:
+    BANKSEL PORTA
+    btfsc   PORTA,  0
+    call    aumento_hz
+    btfsc   PORTA,  1
+    call    decremento_hz
+    goto    s_ondas
+    return
+
+    
+;---------------------------Loop principal-----------------------------------
+ 
+;---------------------------subrutinas--------------------------------------
+config_io:
+    banksel ANSEL	    ;seleccion del Banco 3
+    clrf    ANSEL	    ;asignamos entrada Digital 
+    clrf    ANSELH	    ;asignamos entrada/salida digital
+    
+    
+    
+    Banksel TRISA	    ;seleccion del Banco 1
+    	    
+    movlw   15
+    movwf   TRISB	    ;asignamos como entradas
+    bcf	    TRISB,	5	
+    
+    clrf    TRISA
+    
+    bcf	    OPTION_REG,	7   ;RBPU, Habilitar Pull Ups
+    bsf	    WPUB,	0   ;RB0 y RBI como entradas (interrupciones)
+    bsf	    WPUB,	1
+    
+    banksel PORTA	    ;seleccion del Banco 0
+    clrf    PORTA	    ;limpiamos valores en el puerto A
+;    clrf    PORTC
+    return
+    
+config_reloj:
+    banksel OSCCON 
+    bcf	    IRCF2   ;OSCCON, 6
+    bsf	    IRCF1   ;OSCCON, 5 Oscilador 250khz
+    bcf	    IRCF0   ;OSCCON, 4
+    bsf	    SCS	    ;reloj interno
+    return
+config_tmr:
+    banksel TRISA	;Cambiamos a el banco de Option_reg
+    bcf	    T0CS	;Seleccionamos el Reloj Interno
+    bcf	    PSA		;Activamos el preescalador
+    bsf	    PS2
+    bcf	    PS1
+    bsf	    PS0		;PS=101
+    reinicio_tmr
+    return
+config_interrupciones:
+    bsf	GIE
+    bsf	T0IE
+    bcf	T0IF
+    bsf	RBIE
+    bcf	RBIF
+    return
+config_IOCB:
+    banksel TRISB
+    
+    
+    bsf	    IOCB,   0
+    bsf	    IOCB,   1
+    
+   
+    
+    banksel PORTA
+    movf    PORTA,  W	;al leer termina la condicion de mismatch
+    bcf	    RBIF
+    return
+
+delay_big: 
+    movlw   250		    ;valor inicial del contador
+    movwf   cont_big
+    call    delay_small	    ;rutina de delay
+    decfsz  cont_big, 1	    ;decremetnar el contador
+    goto    $-2		    ;ejecutar dos lineas atras
+    return
+
+delay_small:
+    movlw   50		    ;valor inicial del contador
+    movwf   cont_small	
+    decfsz  cont_small, 1   ;decremetnar el contador
+    goto    $-1		    ;ejecutar linea anterior
+    return
+    
+s_ondas:
+    
+    btfsc   PORTB, 2
+    goto    config_cuadra
+    call    delay_small
+    
+    btfsc   PORTB, 3  
+    goto    config_sier
+    call    delay_small
+    
+    btfsc   PORTB, 4
+    goto    config_tri
+    call    delay_small
+    
+    goto    loop
+    
+
+config_cuadra:
+    
+    btfsc   PORTB, 2
+    goto    $-1
+    
+    
+    clrf    ondas
+    bsf	    ondas, 0
+    
+    return
+
+config_sier:
+    
+    btfsc   PORTB, 3 
+    goto    $-1
+    clrf    ondas
+    bsf	    ondas, 1
+    return
+    
+config_tri:
+    
+    btfsc   PORTB, 4
+    goto    $-1
+    
+    
+    clrf    ondas
+    
+    bsf	    ondas, 2
+    return
+
+check:
+    btfsc   ondas, 0
+    goto    cuadrada
+    btfsc   ondas, 1
+    goto    sier
+    btfsc   ondas, 2
+    goto    tri
+    goto    loop
+    
+    
+cuadrada:    
+    incf    Cuadra    
+    movf    Cuadra, W
+    sublw   127
+    btfss   STATUS, 0
+    goto    $+4     
+    movlw   255    
+    movwf   PORTA
+    return
+    clrf    PORTA
+    return
+
+
+sier:    
+    incf PORTA
+    return
+    
+tri:
+    
+    incf    Tri
+    movf    Tri,  W
+    sublw   127
+    btfss   STATUS, 0
+    goto    decremento_tri
+    incf    PORTA
+    incf    PORTA
+    return
+
+decremento_tri:
+   ; movf    PORTA,  W
+   ; sublw   1
+   ; btfss   STATUS, 2
+   ; goto    $+4
+   ; decf    PORTA
+   ; clrf    Tri
+   ; return
+    decf    PORTA
+    decf    PORTA
+    return
+
+aumento_hz:
+    btfsc   PORTB, 0
+    goto    $-1
+    incf    hz
+    movf    PORTA,  W
+    call    tabla_hz
+    movwf   vTmr
+    return
+decremento_hz:
+    btfsc   PORTB, 1
+    goto    $-1
+    decf    hz
+    movf    PORTA,  W
+    call    tabla_hz
+    movwf   vTmr
+    return
+    return
+incrementar_frec:
+      btfsc PORTB,0
+      goto $-1
+      clrf PORTE
+      bsf   PORTE,0
+      movlw 2
+      subwf  ancho_onda
+      btfss STATUS,0    ; Analiza la bandera de status
+      goto $+2	    ; Si el resultado no es cero reinicia la cuenta
+      return
+      movlw 0	    
+      movwf ancho_onda
+      return
+ 
+decrementar_frec:
+      btfsc PORTB,1
+      goto  $-1
+      clrf PORTE
+      BSF   PORTE,1
+      movlw 2
+      addwf  ancho_onda
+      return
+;---------------------- Seleccionar que tipo de onda mostrar-------------------------------
+tip_onda:
+      btfsc PORTB,2
+      goto $-1
+      clrf PORTA
+      incf escoger_onda
+      return
+
+    
+END
